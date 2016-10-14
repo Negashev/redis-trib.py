@@ -1,2 +1,2 @@
-__version__ = '0.5.0'
-REPO = 'https://github.com/HunanTV/redis-trib.py'
+__version__ = '0.0.1'
+REPO = 'https://github.com/Negashev/redis-trib.py'

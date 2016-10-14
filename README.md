@@ -20,6 +20,10 @@ See also https://github.com/antirez/redis/blob/3.0/src/redis-trib.rb
 Create a cluster in some redis nodes (the nodes are cluster enabled, and none of them in any cluster)
 
     redis-trib.py create NODE_HOST_a:PORT_a NODE_HOST_b:PORT_b ...
+    
+Use with password
+
+    redis-trib.py create --password MyPassword NODE_HOST_a:PORT_a NODE_HOST_b:PORT_b ...
 
 Add another node to a cluster, but neither set as slave nor migrating slots to it
 
@@ -166,3 +170,8 @@ Output:
 * `master_id`: master's `node_id` if it's a slave, or `None` otherwise
 * `assigned_slots`: a list of assigned slots if it's a master; it won't contain slots being migrated
 * `slots_migrating`: boolean value for whether there are any slot(s) migrating or importing on this node
+
+For sett password for all nodes use:
+
+    r = redistrib.clusternode.ClusterNode(...)
+    r.password = MyPassword

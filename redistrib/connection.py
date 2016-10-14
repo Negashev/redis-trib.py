@@ -3,7 +3,7 @@ import socket
 import hiredis
 from functools import wraps
 
-from exceptions import RedisStatusError, RedisIOError
+from redistrib.exceptions import RedisIOError, RedisStatusError
 
 SYM_STAR = '*'
 SYM_DOLLAR = '$'
@@ -61,13 +61,15 @@ def _wrap_sock_op(f):
             return f(conn, *args, **kwargs)
         except IOError as e:
             raise RedisIOError(e, conn.host, conn.port)
+
     return g
 
 
 class Connection(object):
-    def __init__(self, host, port, timeout=5):
+    def __init__(self, host, port, password=None, timeout=5):
         self.host = host
         self.port = port
+        self.password = password
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.reader = hiredis.Reader()
         self.last_raw_message = ''
@@ -79,6 +81,10 @@ class Connection(object):
     @_wrap_sock_op
     def _conn(self):
         self.sock.connect((self.host, self.port))
+        if self.password:
+            # auth with pass
+            self.execute('auth', self.password)
+            logging.debug('Connected to %s:%d with password', self.host, self.port)
 
     @_wrap_sock_op
     def _recv(self):

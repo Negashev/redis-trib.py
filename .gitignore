@@ -9,6 +9,7 @@ dump.rdb
 
 # Distribution / packaging
 .Python
+.idea/
 env/
 bin/
 build/

@@ -80,11 +80,11 @@ def _add_slots(t, begin, end, max_slots):
     addslots(t, begin, end)
 
 
-def create(host_port_list, max_slots=1024):
+def create(host_port_list, password=None, max_slots=1024):
     conns = []
     try:
         for host, port in set(host_port_list):
-            t = Connection(host, port)
+            t = Connection(host, port, password)
             conns.append(t)
             _ensure_cluster_status_unset(t)
             logging.info('Instance at %s:%d checked', t.host, t.port)
@@ -111,8 +111,8 @@ def create(host_port_list, max_slots=1024):
             t.close()
 
 
-def start_cluster(host, port, max_slots=SLOT_COUNT):
-    with Connection(host, port) as t:
+def start_cluster(host, port, password=None, max_slots=SLOT_COUNT):
+    with Connection(host, port, password) as t:
         _ensure_cluster_status_unset(t)
         _add_slots(t, 0, SLOT_COUNT, max_slots)
         _poll_check_status(t)
@@ -120,8 +120,8 @@ def start_cluster(host, port, max_slots=SLOT_COUNT):
                      host, port)
 
 
-def start_cluster_on_multi(host_port_list, max_slots=SLOT_COUNT):
-    return create(host_port_list, max_slots)
+def start_cluster_on_multi(host_port_list, max_slots=SLOT_COUNT, password=None):
+    return create(host_port_list, max_slots, password)
 
 
 def _migr_keys(src_conn, target_host, target_port, slot):
@@ -204,16 +204,16 @@ def _join_to_cluster(clst, new):
 
 
 def join_cluster(cluster_host, cluster_port, newin_host, newin_port,
-                 balancer=None, balance_plan=base_balance_plan):
-    with Connection(newin_host, newin_port) as t, \
-         Connection(cluster_host, cluster_port) as cnode:
+                 balancer=None, balance_plan=base_balance_plan, password=None):
+    with Connection(newin_host, newin_port, password) as t, \
+            Connection(cluster_host, cluster_port, password) as cnode:
         _join_to_cluster(cnode, t)
         nodes = []
         try:
             logging.info(
                 'Instance at %s:%d has joined %s:%d; now balancing slots',
                 newin_host, newin_port, cluster_host, cluster_port)
-            nodes = _list_nodes(t, default_host=newin_host)[0]
+            nodes = _list_nodes(t, default_host=newin_host, password=password)[0]
             for src, dst, count in balance_plan(nodes, balancer):
                 _migr_slots(src, dst, src.assigned_slots[:count], nodes)
         finally:
@@ -221,9 +221,9 @@ def join_cluster(cluster_host, cluster_port, newin_host, newin_port,
                 n.close()
 
 
-def add_node(cluster_host, cluster_port, newin_host, newin_port):
-    with Connection(newin_host, newin_port) as t, \
-         Connection(cluster_host, cluster_port) as c:
+def add_node(cluster_host, cluster_port, newin_host, newin_port, password=None):
+    with Connection(newin_host, newin_port, password) as t, \
+            Connection(cluster_host, cluster_port, password) as c:
         _join_to_cluster(c, t)
 
 
@@ -253,13 +253,13 @@ def _check_master_and_migrate_slots(nodes, myself):
     _migr_slots(myself, node, myself.assigned_slots, nodes)
 
 
-def del_node(host, port):
+def del_node(host, port, password=None):
     myself = None
     nodes = []
-    t = Connection(host, port)
+    t = Connection(host, port, password)
     try:
         _ensure_cluster_status_set(t)
-        nodes, myself = _list_nodes(t, filter_func=lambda n: not n.fail)
+        nodes, myself = _list_nodes(t, filter_func=lambda n: not n.fail, password=password)
         nodes.remove(myself)
         if myself.master:
             _check_master_and_migrate_slots(nodes, myself)
@@ -284,8 +284,8 @@ def quit_cluster(host, port):
     return del_node(host, port)
 
 
-def shutdown_cluster(host, port):
-    with Connection(host, port) as t:
+def shutdown_cluster(host, port, password=None):
+    with Connection(host, port, password) as t:
         _ensure_cluster_status_set(t)
         myself = None
         m = t.send_raw(CMD_CLUSTER_NODES)
@@ -302,11 +302,11 @@ def shutdown_cluster(host, port):
         logging.debug('Ask `cluster delslots` Rsp %s', m)
 
 
-def fix_migrating(host, port):
+def fix_migrating(host, port, password=None):
     nodes = dict()
     mig_srcs = []
     mig_dsts = []
-    t = Connection(host, port)
+    t = Connection(host, port, password)
     try:
         m = t.send_raw(CMD_CLUSTER_NODES)
         logging.debug('Ask `cluster nodes` Rsp %s', m)
@@ -314,6 +314,7 @@ def fix_migrating(host, port):
             if not _valid_node_info(node_info):
                 continue
             node = ClusterNode(*node_info.split(' '))
+            node.password = password
             node.host = node.host or host
             nodes[node.node_id] = node
 
@@ -356,16 +357,25 @@ def _check_slave(slave_host, slave_port, t):
             t.raise_('%s not switched to a slave' % slave_addr)
 
 
-def replicate(master_host, master_port, slave_host, slave_port):
-    with Connection(slave_host, slave_port) as t, \
-         Connection(master_host, master_port) as master_conn:
+def replicate(master_host, master_port, slave_host, slave_port, password=None):
+    with Connection(slave_host, slave_port, password) as t, \
+            Connection(master_host, master_port, password) as master_conn:
         _ensure_cluster_status_set(master_conn)
-        myself = _list_nodes(master_conn)[1]
+        myself = _list_nodes(master_conn, password=password)[1]
         myid = myself.node_id if myself.master else myself.master_id
 
         _join_to_cluster(master_conn, t)
         logging.info('Instance at %s:%d has joined %s:%d; now set replica',
                      slave_host, slave_port, master_host, master_port)
+        if password:
+            m = t.execute('config', 'set', 'masterauth', password)
+            logging.debug('Set `masterauth` for slave Rsp %s', m)
+            if m.lower() != 'ok':
+                t.raise_('Unexpected reply after CONFIG SET MASTERAUTH for slave: %s' % m)
+            m = master_conn.execute('config', 'set', 'masterauth', password)
+            logging.debug('Set `masterauth` for master Rsp %s', m)
+            if m.lower() != 'ok':
+                t.raise_('Unexpected reply after CONFIG SET MASTERAUTH for master: %s' % m)
 
         m = t.execute('cluster', 'replicate', myid)
         logging.debug('Ask `cluster replicate` Rsp %s', m)
@@ -384,7 +394,7 @@ def _filter_master(node):
     return node.master
 
 
-def _list_nodes(conn, default_host=None, filter_func=lambda node: True):
+def _list_nodes(conn, default_host=None, filter_func=lambda node: True, password=None):
     m = conn.send_raw(CMD_CLUSTER_NODES)
     logging.debug('Ask `cluster nodes` Rsp %s', m)
     default_host = default_host or conn.host
@@ -395,6 +405,7 @@ def _list_nodes(conn, default_host=None, filter_func=lambda node: True):
         if not _valid_node_info(node_info):
             continue
         node = ClusterNode(*node_info.split(' '))
+        node.password = password
         if 'myself' in node_info:
             myself = node
             if myself.host == '':
@@ -404,26 +415,26 @@ def _list_nodes(conn, default_host=None, filter_func=lambda node: True):
     return nodes, myself
 
 
-def _list_masters(conn, default_host=None):
+def _list_masters(conn, default_host=None, password=None):
     return _list_nodes(conn, default_host or conn.host,
-                       filter_func=_filter_master)
+                       filter_func=_filter_master, password=password)
 
 
-def list_nodes(host, port, default_host=None, filter_func=lambda node: True):
-    with Connection(host, port) as t:
-        return _list_nodes(t, default_host or host, filter_func)
+def list_nodes(host, port, default_host=None, filter_func=lambda node: True, password=None):
+    with Connection(host, port, password) as t:
+        return _list_nodes(t, default_host or host, filter_func, password)
 
 
-def list_masters(host, port, default_host=None):
-    with Connection(host, port) as t:
-        return _list_masters(t, default_host or host)
+def list_masters(host, port, default_host=None, password=None):
+    with Connection(host, port, password) as t:
+        return _list_masters(t, default_host or host, password)
 
 
-def migrate_slots(src_host, src_port, dst_host, dst_port, slots):
+def migrate_slots(src_host, src_port, dst_host, dst_port, slots, password=None):
     if src_host == dst_host and src_port == dst_port:
         raise ValueError('Same node')
-    with Connection(src_host, src_port) as t:
-        nodes, myself = _list_masters(t, src_host)
+    with Connection(src_host, src_port, password) as t:
+        nodes, myself = _list_masters(t, src_host, password)
 
     slots = set(slots)
     logging.debug('Migrating %s', slots)
@@ -435,18 +446,18 @@ def migrate_slots(src_host, src_port, dst_host, dst_port, slots):
     raise ValueError('Two nodes are not in the same cluster')
 
 
-def rescue_cluster(host, port, subst_host, subst_port):
+def rescue_cluster(host, port, subst_host, subst_port, password=None):
     failed_slots = set(xrange(SLOT_COUNT))
-    with Connection(host, port) as t:
+    with Connection(host, port, password) as t:
         _ensure_cluster_status_set(t)
-        for node in _list_masters(t)[0]:
+        for node in _list_masters(t, password=password)[0]:
             if not node.fail:
                 failed_slots -= set(node.assigned_slots)
         if len(failed_slots) == 0:
             logging.info('No need to rescue cluster at %s:%d', host, port)
             return
 
-    with Connection(subst_host, subst_port) as s:
+    with Connection(subst_host, subst_port, password) as s:
         _ensure_cluster_status_unset(s)
 
         m = s.execute('cluster', 'meet', host, port)
@@ -466,14 +477,14 @@ def rescue_cluster(host, port, subst_host, subst_port):
             subst_host, subst_port, len(failed_slots))
 
 
-def execute(host, port, master_only, slave_only, commands):
-    with Connection(host, port) as c:
+def execute(host, port, master_only, slave_only, commands, password=None):
+    with Connection(host, port, password) as c:
         filter_func = lambda n: True
         if master_only:
             filter_func = _filter_master
         elif slave_only:
             filter_func = lambda n: n.slave
-        nodes = _list_nodes(c, filter_func=filter_func)[0]
+        nodes = _list_nodes(c, filter_func=filter_func, password=password)[0]
 
         result = []
         for n in nodes:

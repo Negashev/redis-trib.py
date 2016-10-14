@@ -2,6 +2,7 @@ from werkzeug.utils import cached_property
 
 from connection import Connection
 
+
 class ClusterNode(object):
     def __init__(self, node_id, latest_know_ip_address_and_port, flags,
                  master_id, last_ping_sent_time, last_pong_received_time,
@@ -10,6 +11,7 @@ class ClusterNode(object):
         host, port = latest_know_ip_address_and_port.split(':')
         self.host = host
         self.port = int(port)
+        self.password = None
         self.flags = flags.split(',')
         self.master_id = None if master_id == '-' else master_id
         self.assigned_slots = []
@@ -52,7 +54,7 @@ class ClusterNode(object):
 
     def get_conn(self):
         if self._conn is None:
-            self._conn = Connection(self.host, self.port)
+            self._conn = Connection(self.host, self.port, self.password)
         return self._conn
 
     def close(self):
